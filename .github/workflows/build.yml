@@ -21,8 +21,8 @@ on:
         default: 'onefile'
         type: choice
         options:
-          - standalone
           - onefile
+          - standalone
 
 env:
   PYTHON_VERSION: '3.11'
@@ -33,57 +33,76 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
       - name: 📥 Checkout code
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------
+      # Python
+      # ------------------------------------------------------------
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # ------------------------------------------------------------
+      # Dependencies
+      # ------------------------------------------------------------
       - name: 📦 Install dependencies
+        shell: pwsh
         run: |
-          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
           pip install nuitka zstandard ordered-set
-        shell: pwsh
 
-      - name: 🔧 Setup MSVC (required by Nuitka)
+      # ------------------------------------------------------------
+      # MSVC (required by Nuitka)
+      # ------------------------------------------------------------
+      - name: 🔧 Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: 🔍 Check for icon file
-        id: check_icon
+      # ------------------------------------------------------------
+      # Icon detection
+      # ------------------------------------------------------------
+      - name: 🎨 Check for icon file
+        id: icon
+        shell: pwsh
         run: |
           if (Test-Path "assets/icon.ico") {
-            echo "ICON_FLAG=--windows-icon-from-ico=assets/icon.ico" >> $env:GITHUB_OUTPUT
-            echo "Icon file found"
+            "ICON_FLAG=--windows-icon-from-ico=assets/icon.ico" >> $env:GITHUB_OUTPUT
           } else {
-            echo "ICON_FLAG=" >> $env:GITHUB_OUTPUT
-            echo "No icon file found, building without icon"
+            "ICON_FLAG=" >> $env:GITHUB_OUTPUT
           }
-        shell: pwsh
 
-      - name: 🔨 Determine build mode
-        id: build_mode
+      # ------------------------------------------------------------
+      # Build mode selection
+      # ------------------------------------------------------------
+      - name: 🔍 Determine build mode
+        id: mode
+        shell: pwsh
         run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $mode = "${{ github.event.inputs.build_mode }}"
           } else {
             $mode = "onefile"
           }
-          echo "MODE=$mode" >> $env:GITHUB_OUTPUT
-          echo "Building in $mode mode"
-        shell: pwsh
+          "MODE=$mode" >> $env:GITHUB_OUTPUT
 
-      - name: 🔨 Build executable (Nuitka) - Onefile
-        if: steps.build_mode.outputs.MODE == 'onefile'
+      # ------------------------------------------------------------
+      # Onefile build
+      # ------------------------------------------------------------
+      - name: 🔨 Build Onefile EXE
+        if: steps.mode.outputs.MODE == 'onefile'
+        shell: pwsh
         run: |
           python -m nuitka `
             --onefile `
             --assume-yes-for-downloads `
             --windows-console-mode=disable `
-            ${{ steps.check_icon.outputs.ICON_FLAG }} `
+            ${{ steps.icon.outputs.ICON_FLAG }} `
             --enable-plugin=tk-inter `
             --enable-plugin=numpy `
             --include-package=PIL `
@@ -93,28 +112,30 @@ jobs:
             --include-package=sklearn `
             --include-package=sklearn.cluster `
             --include-package=customtkinter `
-            --include-data-dir=customtkinter=customtkinter `
             --nofollow-import-to=pytest `
             --nofollow-import-to=matplotlib `
             --nofollow-import-to=tkinter.test `
             --output-dir=dist `
             --output-filename=${{ env.APP_NAME }}-Portable.exe `
-            --onefile-tempdir-spec="%TEMP%\${{ env.APP_NAME }}" `
+            --onefile-tempdir-spec="{TEMP}\${{ env.APP_NAME }}" `
             --product-name="${{ env.APP_NAME }}" `
             --product-version="${{ github.event.inputs.version || '1.0.0' }}" `
             --file-description="Color by Number Application" `
             --company-name="Your Company" `
             src/color_by_number.py
-        shell: pwsh
 
-      - name: 🔨 Build executable (Nuitka) - Standalone
-        if: steps.build_mode.outputs.MODE == 'standalone'
+      # ------------------------------------------------------------
+      # Standalone build
+      # ------------------------------------------------------------
+      - name: 🔨 Build Standalone
+        if: steps.mode.outputs.MODE == 'standalone'
+        shell: pwsh
         run: |
           python -m nuitka `
             --standalone `
             --assume-yes-for-downloads `
             --windows-console-mode=disable `
-            ${{ steps.check_icon.outputs.ICON_FLAG }} `
+            ${{ steps.icon.outputs.ICON_FLAG }} `
             --enable-plugin=tk-inter `
             --enable-plugin=numpy `
             --include-package=PIL `
@@ -124,7 +145,6 @@ jobs:
             --include-package=sklearn `
             --include-package=sklearn.cluster `
             --include-package=customtkinter `
-            --include-data-dir=customtkinter=customtkinter `
             --nofollow-import-to=pytest `
             --nofollow-import-to=matplotlib `
             --nofollow-import-to=tkinter.test `
@@ -134,58 +154,36 @@ jobs:
             --file-description="Color by Number Application" `
             --company-name="Your Company" `
             src/color_by_number.py
-        shell: pwsh
 
-      - name: 📁 Prepare standalone distribution
-        if: steps.build_mode.outputs.MODE == 'standalone'
+      # ------------------------------------------------------------
+      # Zip standalone output
+      # ------------------------------------------------------------
+      - name: 📁 Package Standalone
+        if: steps.mode.outputs.MODE == 'standalone'
+        shell: pwsh
         run: |
-          # Rename the output folder
-          $srcDir = "dist/color_by_number.dist"
-          $destDir = "dist/${{ env.APP_NAME }}-Standalone"
-          if (Test-Path $srcDir) {
-            Rename-Item -Path $srcDir -NewName "${{ env.APP_NAME }}-Standalone"
+          $src = "dist/color_by_number.dist"
+          $dst = "dist/${{ env.APP_NAME }}-Standalone"
+          if (Test-Path $src) {
+            Rename-Item $src $dst
+            Compress-Archive $dst "$dst.zip"
           }
-          
-          # Create ZIP archive
-          Compress-Archive -Path $destDir -DestinationPath "dist/${{ env.APP_NAME }}-Standalone.zip"
-        shell: pwsh
 
-      - name: 📤 Upload artifact (Onefile)
-        if: steps.build_mode.outputs.MODE == 'onefile'
+      # ------------------------------------------------------------
+      # Upload artifacts
+      # ------------------------------------------------------------
+      - name: 📤 Upload Onefile EXE
+        if: steps.mode.outputs.MODE == 'onefile'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-Portable-v${{ github.event.inputs.version || '1.0.0' }}
           path: dist/${{ env.APP_NAME }}-Portable.exe
           retention-days: 30
-          if-no-files-found: error
 
-      - name: 📤 Upload artifact (Standalone)
-        if: steps.build_mode.outputs.MODE == 'standalone'
+      - name: 📤 Upload Standalone ZIP
+        if: steps.mode.outputs.MODE == 'standalone'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-Standalone-v${{ github.event.inputs.version || '1.0.0' }}
           path: dist/${{ env.APP_NAME }}-Standalone.zip
           retention-days: 30
-          if-no-files-found: error
-
-  # Optional: Create release on tags
-  release:
-    needs: build-windows
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    
-    steps:
-      - name: 📥 Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: 🚀 Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: artifacts/**/*
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
