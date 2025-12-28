@@ -1,17 +1,14 @@
 name: Build Windows Executable (Nuitka)
 
 on:
-  # Trigger on push to main branch
   push:
     branches: [ main, master ]
     tags:
       - 'v*'
-  
-  # Trigger on pull request
+
   pull_request:
     branches: [ main, master ]
-  
-  # Allow manual trigger from GitHub website
+
   workflow_dispatch:
     inputs:
       version:
@@ -21,7 +18,7 @@ on:
       build_mode:
         description: 'Build mode'
         required: false
-        default: 'standalone'
+        default: 'onefile'
         type: choice
         options:
           - standalone
@@ -34,54 +31,52 @@ env:
 jobs:
   build-windows-onefile:
     runs-on: windows-latest
-    if: github.event.inputs.build_mode == 'onefile' || startsWith(github.ref, 'refs/tags/v')
-    
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build_mode == 'onefile'
+
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
 
-    - name: 🐍 Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        cache: 'pip'
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
-    - name: 📦 Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install nuitka zstandard ordered-set
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nuitka zstandard ordered-set
+        shell: pwsh
 
-    - name: 🔧 Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
+      - name: 🔧 Setup MSVC (required by Nuitka)
+        uses: ilammy/msvc-dev-cmd@v1
 
-    - name: 🔨 Build single-file with Nuitka
-      run: |
-        python -m nuitka `
-          --onefile `
-          --windows-console-mode=disable `
-          --windows-icon-from-ico=assets/icon.ico `
-          --enable-plugin=tk-inter `
-          --enable-plugin=numpy `
-          --include-package=PIL `
-          --include-package=sklearn `
-          --include-package=cv2 `
-          --include-package=scipy `
-          --include-package-data=sklearn `
-          --nofollow-import-to=pytest `
-          --nofollow-import-to=matplotlib `
-          --assume-yes-for-downloads `
-          --output-dir=dist `
-          --output-filename=${{ env.APP_NAME }}-Portable.exe `
-          --onefile-tempdir-spec="%TEMP%\ColorByNumber" `
-          src/color_by_number.py
-      shell: pwsh
-      continue-on-error: true
+      - name: 🔨 Build single-file executable (Nuitka)
+        run: |
+          python -m nuitka `
+            --onefile `
+            --assume-yes-for-downloads `
+            --windows-console-mode=disable `
+            --windows-icon-from-ico=assets/icon.ico `
+            --enable-plugin=tk-inter `
+            --enable-plugin=numpy `
+            --include-package=PIL `
+            --include-package=cv2 `
+            --include-package=scipy `
+            --nofollow-import-to=pytest `
+            --nofollow-import-to=matplotlib `
+            --output-dir=dist `
+            --output-filename=${{ env.APP_NAME }}-Portable.exe `
+            --onefile-tempdir-spec="%TEMP%\${{ env.APP_NAME }}" `
+            src/color_by_number.py
+        shell: pwsh
 
-    - name: 📤 Upload portable artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}-Portable
-        path: dist/${{ env.APP_NAME }}-Portable.exe
-        retention-days: 30
-        if-no-files-found: warn
+      - name: 📤 Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-Portable
+          path: dist/${{ env.APP_NAME }}-Portable.exe
+          retention-days: 30
+          if-no-files-found: error
