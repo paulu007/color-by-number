@@ -1,0 +1,333 @@
+name: Build Windows Executable (Nuitka)
+
+on:
+  # Trigger on push to main branch
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  
+  # Trigger on pull request
+  pull_request:
+    branches: [ main, master ]
+  
+  # Allow manual trigger from GitHub website
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: false
+        default: '1.0.0'
+      build_mode:
+        description: 'Build mode'
+        required: false
+        default: 'standalone'
+        type: choice
+        options:
+          - standalone
+          - onefile
+
+env:
+  PYTHON_VERSION: '3.11'
+  APP_NAME: 'ColorByNumber'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    # Step 1: Checkout code
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    # Step 2: Setup Python
+    - name: 🐍 Set up Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    # Step 3: Install dependencies
+    - name: 📦 Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        pip install -r requirements.txt
+        pip install nuitka zstandard ordered-set
+
+    # Step 4: Install Visual C++ Build Tools (for Nuitka compilation)
+    - name: 🔧 Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    # Step 5: Verify installations
+    - name: ✅ Verify installations
+      run: |
+        python --version
+        python -c "import nuitka; print('Nuitka version:', nuitka.__version__)"
+        python -c "import numpy; print('NumPy:', numpy.__version__)"
+        python -c "import cv2; print('OpenCV:', cv2.__version__)"
+        python -c "import sklearn; print('Scikit-learn:', sklearn.__version__)"
+        python -c "import PIL; print('Pillow:', PIL.__version__)"
+
+    # Step 6: Build with Nuitka (Standalone - folder with exe)
+    - name: 🔨 Build with Nuitka (Standalone)
+      run: |
+        python -m nuitka `
+          --standalone `
+          --windows-console-mode=disable `
+          --windows-icon-from-ico=assets/icon.ico `
+          --enable-plugin=tk-inter `
+          --enable-plugin=numpy `
+          --include-package=PIL `
+          --include-package=sklearn `
+          --include-package=cv2 `
+          --include-package=scipy `
+          --include-package-data=sklearn `
+          --include-package-data=cv2 `
+          --nofollow-import-to=pytest `
+          --nofollow-import-to=matplotlib `
+          --nofollow-import-to=IPython `
+          --nofollow-import-to=jupyter `
+          --assume-yes-for-downloads `
+          --output-dir=dist `
+          --output-filename=${{ env.APP_NAME }}.exe `
+          --company-name="Happy Coloring" `
+          --product-name="Color by Number" `
+          --product-version="${{ github.event.inputs.version || '1.0.0' }}" `
+          --file-description="Color by Number Application" `
+          --copyright="Copyright 2024" `
+          --remove-output `
+          --report=nuitka-report.xml `
+          src/color_by_number.py
+      shell: pwsh
+
+    # Step 7: Show build output
+    - name: 📋 List build output
+      run: |
+        echo "=== Build Output ==="
+        Get-ChildItem -Path dist -Recurse | Format-Table Name, Length, LastWriteTime
+      shell: pwsh
+
+    # Step 8: Create release package
+    - name: 📦 Create release package
+      run: |
+        # Create release folder
+        New-Item -ItemType Directory -Force -Path "release"
+        
+        # Find the output folder (Nuitka creates folder with .dist suffix)
+        $distFolder = Get-ChildItem -Path "dist" -Directory | Where-Object { $_.Name -like "*.dist" } | Select-Object -First 1
+        
+        if ($distFolder) {
+            # Copy all files from dist folder
+            Copy-Item -Path "$($distFolder.FullName)\*" -Destination "release\" -Recurse -Force
+        } else {
+            # Fallback: copy from color_by_number.dist
+            Copy-Item -Path "dist\color_by_number.dist\*" -Destination "release\" -Recurse -Force
+        }
+        
+        # Rename exe if needed
+        if (Test-Path "release\color_by_number.exe") {
+            Rename-Item -Path "release\color_by_number.exe" -NewName "${{ env.APP_NAME }}.exe"
+        }
+        
+        # Create README for users
+        @"
+        ╔═══════════════════════════════════════════════════════════╗
+        ║     🎨 Color by Number - Happy Coloring! v${{ github.event.inputs.version || '1.0.0' }}         ║
+        ╚═══════════════════════════════════════════════════════════╝
+
+        HOW TO START:
+        ─────────────
+        1. Double-click "${{ env.APP_NAME }}.exe"
+        2. If Windows blocks it, click "More info" → "Run anyway"
+        3. Enjoy coloring! 🎉
+
+        HOW TO USE:
+        ───────────
+        1. Click "Load Image" or "Sample Image" to get started
+        2. Adjust the number of colors (5-25)
+        3. Click "Generate Template" to create your puzzle
+        4. Select a color from the palette on the right
+        5. Click on regions in the image to fill them
+        6. Complete the picture!
+
+        CONTROLS:
+        ─────────
+        • Left-click      → Fill region with selected color
+        • Right-click drag → Pan/move around
+        • Mouse wheel     → Zoom in/out
+        • Space bar       → Play/Pause animation
+        • Ctrl + Z        → Undo
+        • Ctrl + Y        → Redo
+        • Ctrl + S        → Save progress
+
+        FEATURES:
+        ─────────
+        ✓ Auto-complete animation
+        ✓ Record video of coloring process
+        ✓ Export as GIF or MP4
+        ✓ Save and load progress
+        ✓ Multiple fill orders (random, by color, by size)
+
+        TROUBLESHOOTING:
+        ────────────────
+        ❌ App won't start?
+           → Make sure you extracted ALL files from the zip
+           → Try running as Administrator
+           → Check if antivirus is blocking it
+
+        ❌ Black screen or crash?
+           → Update your graphics drivers
+           → Try compatibility mode (Windows 8)
+
+        ❌ Missing DLL error?
+           → Download Visual C++ Redistributable:
+             https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+        ═══════════════════════════════════════════════════════════
+        Need help? Create an issue on GitHub!
+        Made with ❤️ for coloring enthusiasts
+        ═══════════════════════════════════════════════════════════
+        "@ | Out-File -FilePath "release\README.txt" -Encoding UTF8
+        
+        # Create version info
+        @"
+        Version: ${{ github.event.inputs.version || '1.0.0' }}
+        Build Date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        Build: ${{ github.run_number }}
+        Commit: ${{ github.sha }}
+        "@ | Out-File -FilePath "release\version.txt" -Encoding UTF8
+        
+        # Create the zip
+        Compress-Archive -Path "release\*" -DestinationPath "${{ env.APP_NAME }}-Windows-x64.zip" -Force
+        
+        # Show final package contents
+        echo "=== Package Contents ==="
+        Get-ChildItem -Path "release" | Format-Table Name, Length
+        
+        # Show zip size
+        $zipSize = (Get-Item "${{ env.APP_NAME }}-Windows-x64.zip").Length / 1MB
+        echo "=== Final Package Size: $([math]::Round($zipSize, 2)) MB ==="
+      shell: pwsh
+
+    # Step 9: Upload build report
+    - name: 📊 Upload Nuitka report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: nuitka-report
+        path: nuitka-report.xml
+        retention-days: 7
+
+    # Step 10: Upload artifact
+    - name: 📤 Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.APP_NAME }}-Windows-x64
+        path: ${{ env.APP_NAME }}-Windows-x64.zip
+        retention-days: 30
+
+    # Step 11: Create GitHub Release (only on tags)
+    - name: 🚀 Create Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ${{ env.APP_NAME }}-Windows-x64.zip
+        name: "🎨 Color by Number ${{ github.ref_name }}"
+        body: |
+          ## 🎨 Color by Number - ${{ github.ref_name }}
+          
+          ### 📥 Installation
+          1. Download `${{ env.APP_NAME }}-Windows-x64.zip` below
+          2. **Extract ALL files** to a folder (Right-click → Extract All)
+          3. Double-click `${{ env.APP_NAME }}.exe`
+          4. Start coloring! 🎉
+          
+          ### 💻 System Requirements
+          - Windows 10 (64-bit) or Windows 11
+          - No Python installation required!
+          - No additional software needed!
+          
+          ### ⚠️ First Time Running
+          Windows SmartScreen may show a warning because the app isn't signed.
+          
+          **Click:** `More info` → `Run anyway`
+          
+          This is completely safe - you can check the source code yourself!
+          
+          ### ✨ Features
+          - 🖼️ Convert any image to color-by-number
+          - 🎨 Automatic color palette (5-25 colors)
+          - 🎬 Auto-complete animation
+          - 🎥 Record and export as video/GIF
+          - 💾 Save and load progress
+          - 🔍 Zoom and pan controls
+          
+          ### 🐛 Troubleshooting
+          - **Missing DLL error?** Install [VC++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+          - **App won't start?** Make sure you extracted ALL files from the zip
+          - **Other issues?** [Create an issue](../../issues)
+          
+          ---
+          📦 Built with Nuitka | 🐍 Python ${{ env.PYTHON_VERSION }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================
+  # Optional: Build single-file version (larger but simpler)
+  # ============================================================
+  build-windows-onefile:
+    runs-on: windows-latest
+    if: github.event.inputs.build_mode == 'onefile' || startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install nuitka zstandard ordered-set
+
+    - name: 🔧 Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: 🔨 Build single-file with Nuitka
+      run: |
+        python -m nuitka `
+          --onefile `
+          --windows-console-mode=disable `
+          --windows-icon-from-ico=assets/icon.ico `
+          --enable-plugin=tk-inter `
+          --enable-plugin=numpy `
+          --include-package=PIL `
+          --include-package=sklearn `
+          --include-package=cv2 `
+          --include-package=scipy `
+          --include-package-data=sklearn `
+          --nofollow-import-to=pytest `
+          --nofollow-import-to=matplotlib `
+          --assume-yes-for-downloads `
+          --output-dir=dist `
+          --output-filename=${{ env.APP_NAME }}-Portable.exe `
+          --onefile-tempdir-spec="%TEMP%\ColorByNumber" `
+          src/color_by_number.py
+      shell: pwsh
+      continue-on-error: true
+
+    - name: 📤 Upload portable artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.APP_NAME }}-Portable
+        path: dist/${{ env.APP_NAME }}-Portable.exe
+        retention-days: 30
+        if-no-files-found: warn
